@@ -75,3 +75,20 @@ int main() {
     demo();
     return 0;
 }
+
+/*
+Total accounts: 0
+
+Account created for Alice
+Account created for Bob
+Alice's balance: $150
+Accounts equal? No
+Total accounts: 2
+Account destroyed for Bob
+Account destroyed for Alice
+
+After scope: Total accounts: 0
+
+
+=== Code Execution Successful ===
+*/
