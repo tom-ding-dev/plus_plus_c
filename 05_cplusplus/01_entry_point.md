@@ -768,3 +768,251 @@ int getHttpPort() {
 
 > **好的配置管理 = 显式依赖 + 类型安全 + 可验证 + 可测试**。  
 > 抛弃“全局单例”的诱惑，拥抱 **依赖注入 + 结构化配置**，你的大型 C++ 项目将获得更强的可维护性、可测试性和演进能力。
+
+
+# Singleton-like Global Configuration 的变体
+
+具体分类：全局单例模式
+本质：通过 extern 关键字实现跨文件访问的全局变量
+变体：非严格单例（可以创建多个实例，但只使用一个全局实例）
+实现：头文件声明 + 源文件定义
+
+
+# 依赖注入 与 
+
+在大型软件系统中，**服务模式**（Service Pattern）和**依赖注入**（Dependency Injection, DI）常被混淆，但它们解决的是不同层面的问题。下面通过一个 **C++ 示例项目**（模拟电商订单处理）清晰辨析两者的本质、关系与优劣。
+
+---
+
+## 🧩 场景设定：电商订单处理系统
+
+需求：
+- 创建订单时需：
+  1. 验证用户身份（调用 `AuthService`）
+  2. 扣减库存（调用 `InventoryService`）
+  3. 记录日志（调用 `Logger`）
+
+---
+
+## 一、服务模式（Service Pattern）—— **“做什么”**
+
+### ✅ 定义
+> **服务模式是一种架构风格，将业务逻辑封装在无状态的、可重用的“服务类”中**。  
+> 它关注 **功能划分** 和 **职责分离**，不关心如何获取依赖。
+
+### 🔧 实现（仅服务定义）
+```cpp
+// services.h
+class AuthService {
+public:
+    virtual bool authenticate(const std::string& token) = 0;
+};
+
+class InventoryService {
+public:
+    virtual bool deductStock(int productId, int quantity) = 0;
+};
+
+class Logger {
+public:
+    virtual void log(const std::string& msg) = 0;
+};
+
+// 具体服务实现
+class RealAuthService : public AuthService {
+public:
+    bool authenticate(const std::string& token) override {
+        // 调用真实认证 API
+        return !token.empty();
+    }
+};
+
+class OrderService {  // ← 这也是一个“服务”
+public:
+    void createOrder(int userId, int productId) {
+        // ❌ 问题：如何获取 authService_ 等依赖？
+        if (!authService_->authenticate("user_token")) {
+            throw std::runtime_error("Auth failed");
+        }
+        inventoryService_->deductStock(productId, 1);
+        logger_->log("Order created");
+    }
+
+private:
+    AuthService* authService_;      // ← 依赖未初始化！
+    InventoryService* inventoryService_;
+    Logger* logger_;
+};
+```
+
+### ⚠️ 服务模式的局限
+- **只定义了“有哪些服务”，但没解决“服务实例从哪来”**；
+- `OrderService` 内部依赖硬编码，无法替换（如测试时用 mock）；
+- **服务之间耦合**：`OrderService` 强依赖具体服务类型。
+
+> 💡 服务模式回答：**“系统需要哪些能力？”**  
+> 但它不回答：**“这些能力如何被提供和组合？”**
+
+---
+
+## 二、依赖注入（DI）—— **“怎么做”**
+
+### ✅ 定义
+> **依赖注入是一种设计模式，通过外部传入依赖对象，而非在类内部创建**。  
+> 它关注 **解耦** 和 **可测试性**。
+
+### 🔧 实现（结合服务模式 + DI）
+```cpp
+// order_service.h
+class OrderService {
+public:
+    // 依赖通过构造函数注入（Constructor Injection）
+    OrderService(
+        AuthService* auth,
+        InventoryService* inventory,
+        Logger* logger
+    ) : authService_(auth), inventoryService_(inventory), logger_(logger) {}
+
+    void createOrder(int userId, int productId) {
+        if (!authService_->authenticate("user_token")) {
+            throw std::runtime_error("Auth failed");
+        }
+        inventoryService_->deductStock(productId, 1);
+        logger_->log("Order created");
+    }
+
+private:
+    AuthService* authService_;
+    InventoryService* inventoryService_;
+    Logger* logger_;
+};
+
+// main.cpp
+int main() {
+    // 1. 创建具体服务实例
+    RealAuthService authService;
+    RealInventoryService inventoryService;
+    FileLogger logger("app.log");
+
+    // 2. 通过 DI 组装 OrderService
+    OrderService orderService(&authService, &inventoryService, &logger);
+
+    orderService.createOrder(123, 456);
+}
+```
+
+### ✅ DI 带来的优势
+| 问题 | DI 如何解决 |
+|------|------------|
+| **硬编码依赖** | 依赖由外部传入，`OrderService` 不知道具体实现 |
+| **难以测试** | 测试时可传入 `MockAuthService` |
+| **复用性差** | 同一个 `OrderService` 可搭配不同日志策略（文件/网络） |
+
+#### 🧪 单元测试示例
+```cpp
+// test_order_service.cpp
+class MockAuthService : public AuthService {
+    bool authenticate(const std::string&) override { return true; } // 模拟成功
+};
+
+TEST(OrderServiceTest, CreatesOrderWhenAuthSuccess) {
+    MockAuthService auth;
+    FakeInventoryService inventory; // 扣库存总是成功
+    NullLogger logger;              // 不输出日志
+
+    OrderService service(&auth, &inventory, &logger);
+    EXPECT_NO_THROW(service.createOrder(1, 1)); // 测试通过！
+}
+```
+
+> 💡 依赖注入回答：**“如何将服务组装成可用的系统？”**
+
+---
+
+## 三、关键辨析：服务模式 vs 依赖注入
+
+| 维度 | 服务模式（Service Pattern） | 依赖注入（DI） |
+|------|---------------------------|--------------|
+| **关注点** | **业务能力划分**（What） | **依赖组装方式**（How） |
+| **角色** | 定义系统“有哪些服务类” | 定义“服务如何被传递和使用” |
+| **耦合度** | 服务间仍可能紧耦合 | 显著降低耦合（依赖抽象） |
+| **可测试性** | 差（依赖具体实现） | 极佳（可注入 mock） |
+| **是否互斥** | ❌ **互补！DI 通常用于管理服务** | ✅ DI 是服务模式的最佳搭档 |
+
+> 🔄 **正确关系**：  
+> **服务模式定义“零件”，依赖注入负责“组装零件”**。
+
+---
+
+## 四、反模式对比：不用 DI 的服务模式（灾难现场）
+
+```cpp
+// 错误示范：服务模式 + 全局单例（高耦合）
+class OrderService {
+public:
+    void createOrder(int userId, int productId) {
+        // 直接调用全局单例 → 无法替换、无法测试
+        if (!AuthService::getInstance().authenticate("token")) {
+            throw std::runtime_error("Auth failed");
+        }
+        InventoryService::getInstance().deductStock(productId, 1);
+        Logger::getInstance().log("Order created");
+    }
+};
+```
+
+### ❌ 问题
+1. **测试时无法 mock**：必须启动真实认证服务；
+2. **隐藏依赖**：看 `createOrder` 签名不知道它需要认证；
+3. **生命周期混乱**：单例在何时初始化？线程安全吗？
+
+---
+
+## 五、高级实践：DI 容器（C++ 中的轻量方案）
+
+虽然 C++ 没有 Spring 那样的 DI 框架，但可用简单工厂模拟：
+
+```cpp
+// di_container.h
+class DIContainer {
+public:
+    template<typename T>
+    T* resolve() {
+        // 简化版：预注册实例
+        if constexpr (std::is_same_v<T, AuthService>) {
+            static RealAuthService instance;
+            return &instance;
+        }
+        // ... 其他服务
+    }
+};
+
+// main.cpp
+int main() {
+    DIContainer container;
+    OrderService orderService(
+        container.resolve<AuthService>(),
+        container.resolve<InventoryService>(),
+        container.resolve<Logger>()
+    );
+}
+```
+
+> 💡 在 C++ 中，**手动 DI**（显式传参）比复杂容器更常见，因其：
+> - 零开销；
+> - 无运行时反射；
+> - 符合 RAII 原则。
+
+---
+
+## ✅ 总结：一句话厘清
+
+> **服务模式告诉你“系统需要哪些服务员”，依赖注入告诉你“如何把服务员安排到合适的岗位上”。**  
+> - 没有服务模式 → 系统功能混乱；  
+> - 没有依赖注入 → 系统僵化不可测。  
+
+在现代 C++ 工程中，**应同时采用两者**：
+1. 用 **服务模式** 划分业务模块（`UserService`, `PaymentService`...）；
+2. 用 **依赖注入**（构造函数注入）组装服务，确保可测试与低耦合。
+
+这才是构建可维护大型系统的正道。
